@@ -14,6 +14,7 @@ import com.imaginarycode.minecraft.redisbungee.api.PlayerDataManager;
 import com.imaginarycode.minecraft.redisbungee.api.RedisBungeePlugin;
 import com.imaginarycode.minecraft.redisbungee.api.config.RedisBungeeConfiguration;
 import com.imaginarycode.minecraft.redisbungee.events.PlayerChangedServerNetworkEvent;
+import com.imaginarycode.minecraft.redisbungee.events.PlayerJoinedNetworkEvent;
 import com.imaginarycode.minecraft.redisbungee.events.PlayerLeftNetworkEvent;
 import com.imaginarycode.minecraft.redisbungee.events.PubSubMessageEvent;
 import com.velocitypowered.api.event.Continuation;
@@ -28,7 +29,7 @@ import net.kyori.adventure.text.Component;
 
 import java.util.concurrent.TimeUnit;
 
-public class VelocityPlayerDataManager extends PlayerDataManager<Player, PostLoginEvent, DisconnectEvent, PubSubMessageEvent, PlayerChangedServerNetworkEvent, PlayerLeftNetworkEvent, ServerConnectedEvent> {
+public class VelocityPlayerDataManager extends PlayerDataManager<Player, PostLoginEvent, DisconnectEvent, PubSubMessageEvent, PlayerChangedServerNetworkEvent, PlayerLeftNetworkEvent, ServerConnectedEvent, PlayerJoinedNetworkEvent> {
     public VelocityPlayerDataManager(RedisBungeePlugin<Player> plugin) {
         super(plugin);
     }
@@ -43,6 +44,12 @@ public class VelocityPlayerDataManager extends PlayerDataManager<Player, PostLog
     @Subscribe
     public void onNetworkPlayerQuit(PlayerLeftNetworkEvent event) {
         handleNetworkPlayerQuit(event);
+    }
+
+    @Override
+    @Subscribe
+    public void onNetworkPlayerJoin(PlayerJoinedNetworkEvent event) {
+        handleNetworkPlayerJoin(event);
     }
 
     @Override
@@ -68,13 +75,20 @@ public class VelocityPlayerDataManager extends PlayerDataManager<Player, PostLog
     public void onLoginEvent(LoginEvent event, Continuation continuation) {
         // check if online
         if (getLastOnline(event.getPlayer().getUniqueId()) == 0) {
-            if (plugin.configuration().kickWhenOnline()) {
-                kickPlayer(event.getPlayer().getUniqueId(), plugin.langConfiguration().messages().loggedInFromOtherLocation());
-                // wait 3 seconds before releasing the event
-                plugin.executeAsyncAfter(continuation::resume, TimeUnit.SECONDS, 3);
-            } else {
-                event.setResult(ResultedEvent.ComponentResult.denied(plugin.langConfiguration().messages().alreadyLoggedIn()));
+            // because something can go wrong and proxy somehow does not update player data correctly on shutdown
+            // we have to check proxy if it has the player
+            String proxyId = getProxyFor(event.getPlayer().getUniqueId());
+            if (proxyId == null || !plugin.proxyDataManager().isPlayerTrulyOnProxy(proxyId, event.getPlayer().getUniqueId())) {
                 continuation.resume();
+            } else {
+                if (plugin.configuration().kickWhenOnline()) {
+                    kickPlayer(event.getPlayer().getUniqueId(), plugin.langConfiguration().messages().loggedInFromOtherLocation());
+                    // wait 3 seconds before releasing the event
+                    plugin.executeAsyncAfter(continuation::resume, TimeUnit.SECONDS, 3);
+                } else {
+                    event.setResult(ResultedEvent.ComponentResult.denied(plugin.langConfiguration().messages().alreadyLoggedIn()));
+                    continuation.resume();
+                }
             }
         } else {
             continuation.resume();
